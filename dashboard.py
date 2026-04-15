@@ -1,4 +1,4 @@
-# dashboard/app.py
+# dashboard.py (corrected – use .map instead of .applymap)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -21,7 +21,7 @@ PROJECT_NAME = "Kakamega Assembly Hall"
 
 st.set_page_config(page_title="5D BIM Dashboard", page_icon="🏗️", layout="wide")
 
-# ---- Custom iQON-style theme (no transform scale, dark with subtle glow) ----
+# ---- Custom iQON-style theme ----
 def apply_custom_theme():
     st.markdown("""
     <style>
@@ -60,10 +60,8 @@ def apply_custom_theme():
         box-shadow:
             0 0 14px rgba(60, 160, 255, 0.6),
             0 0 35px rgba(30, 120, 255, 0.25);
-        /* NO transform scale — keeps it tight like iQON */
     }
 
-    /* Metric labels & values */
     div[data-testid="stMetric"] label,
     div[data-testid="stMetricLabel"] {
         color: #8899bb !important;
@@ -76,14 +74,12 @@ def apply_custom_theme():
         color: #ddeeff !important;
     }
 
-    /* ===== SIDEBAR — dark with a single left accent line ===== */
     section[data-testid="stSidebar"] {
         background: #0f1117 !important;
         border-right: 1px solid rgba(30, 120, 255, 0.3);
         box-shadow: 2px 0 20px rgba(30, 120, 255, 0.08);
     }
 
-    /* ===== BUTTONS ===== */
     .stButton > button {
         background: #131a2e;
         color: #7ab8ff;
@@ -100,33 +96,28 @@ def apply_custom_theme():
         color: #b8d9ff;
     }
 
-    /* ===== DATA TABLE ===== */
     .stDataFrame {
         background: #13161e !important;
         border-radius: 10px;
         border: 1px solid rgba(40, 120, 255, 0.25);
     }
 
-    /* ===== HEADINGS ===== */
     h1, h2, h3 {
         color: #c5deff;
-        text-shadow: none;   /* no glow on text — cleaner like iQON */
+        text-shadow: none;
         letter-spacing: -0.01em;
     }
 
-    /* ===== INPUTS / SELECTS / SLIDERS ===== */
     .stSelectbox > div, .stMultiSelect > div, .stSlider > div {
         background: #13161e !important;
         border-color: rgba(40, 120, 255, 0.3) !important;
     }
 
-    /* Accent color on slider thumb */
     .stSlider [data-baseweb="slider"] [role="slider"] {
         background: #2e7fff !important;
         box-shadow: 0 0 8px rgba(46, 127, 255, 0.7);
     }
 
-    /* ===== FORM CONTAINER ===== */
     .stForm {
         background: #13161e;
         border: 1px solid rgba(40, 120, 255, 0.25);
@@ -134,7 +125,6 @@ def apply_custom_theme():
         padding: 1rem;
     }
 
-    /* ===== SUCCESS / ERROR / INFO ALERTS ===== */
     .stAlert {
         border-radius: 10px;
         border-left: 3px solid #2e7fff;
@@ -308,7 +298,7 @@ col9.metric("Total Length", f"{total_length:,.2f} m" if total_length else "N/A")
 col10 = st.columns(1)[0]
 col10.metric("Extra Cost", f"{new_extra:,.0f} KES")
 
-# ---- Predictive Delay Warning (Trend Analysis) ----
+# ---- Predictive Delay Warning ----
 st.subheader("🔮 Predictive Delay Warning")
 if not spi_history_df.empty:
     spi_history_df['recorded_at'] = pd.to_datetime(spi_history_df['recorded_at'])
@@ -356,7 +346,7 @@ def color_risk(val):
     elif val < 0.95: return 'background-color: #FF8C00; color: white'
     else: return 'background-color: #2E7D32; color: white'
 
-styled = heat_df.style.applymap(color_risk, subset=['SPI','CPI'])
+styled = heat_df.style.map(color_risk, subset=['SPI','CPI'])   # <-- FIXED: changed applymap to map
 st.dataframe(styled, use_container_width=True, height=400)
 
 # ---- Monte Carlo ----
@@ -364,7 +354,7 @@ st.subheader("🎲 Monte Carlo Forecast")
 num_sim = st.slider("Simulations", 100, 5000, 1000)
 spi_vals = filtered['SPI'].dropna()
 if len(spi_vals) > 0:
-    planned_duration = 100  # placeholder – can be computed from schedule dates
+    planned_duration = 100
     sim_spi = np.random.choice(spi_vals, size=(num_sim, len(spi_vals)), replace=True)
     sim_duration = planned_duration / sim_spi.mean(axis=1)
     fig_hist = px.histogram(sim_duration, nbins=50, title="Simulated Project Durations")
