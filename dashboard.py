@@ -1089,9 +1089,10 @@ with st.expander("📐 Quantity Mapping", expanded=False):
     map_response = supabase.table("quantity_mapping").select("category", "quantity_type").execute()
     map_df = pd.DataFrame(map_response.data)
     if map_df.empty:
+        # *** FIXED: default for Walls changed from Length to Area ***
         default_mapping = [
             {"category": c, "quantity_type": t} for c, t in [
-                ("Walls","Length"),("Columns","Volume"),("Structural Framing","Length"),
+                ("Walls","Area"),("Columns","Volume"),("Structural Framing","Length"),
                 ("Roofs","Area"),("Floors","Area"),("Doors","Count"),("Windows","Count"),
             ]
         ]
