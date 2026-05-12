@@ -73,7 +73,21 @@ div[data-testid="stMetric"]{display:none!important;}
 </style>
 """, unsafe_allow_html=True)
 
-# ============================  PLOTLY THEME ============================
+# ============================  HELPER FUNCTIONS (defined BEFORE use) ============================
+def badge(val, lo=0.95, hi=1.0):
+    if val >= hi:
+        return '<span class="badge bg">On Track</span>'
+    if val >= lo:
+        return '<span class="badge ba">Warning</span>'
+    return '<span class="badge br">Behind</span>'
+
+def badge_cpi(val):
+    if val >= 1.0:
+        return '<span class="badge bg">Under Budget</span>'
+    if val >= 0.9:
+        return '<span class="badge ba">Warning</span>'
+    return '<span class="badge br">Over Budget</span>'
+
 def dark_fig(fig):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -450,13 +464,13 @@ st.subheader("📸 Site Photos")
 uploaded_file = st.file_uploader("Upload a site photo", type=["jpg", "jpeg", "png"], key="photo_uploader_streamlit")
 if uploaded_file is not None:
     try:
-        # Upload to Supabase Storage
+        import uuid
         file_bytes = uploaded_file.getvalue()
-        file_name = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        file_ext = uploaded_file.name.split(".")[-1]
+        file_name = f"photo_{uuid.uuid4().hex[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_ext}"
         supabase.storage.from_("photos").upload(file_name, file_bytes)
         public_url = supabase.storage.from_("photos").get_public_url(file_name)
         
-        # Save to photos table
         supabase.table("photos").insert({
             "project_id": project_id,
             "task_id": None,
@@ -623,14 +637,3 @@ st.markdown(f"""
   5D BIM Dashboard · {selected_project} · {today_str}
 </div>
 """, unsafe_allow_html=True)
-
-# Helper functions for badges (must be defined before use)
-def badge(val, lo=0.95, hi=1.0):
-    if val >= hi: return '<span class="badge bg">On Track</span>'
-    if val >= lo: return '<span class="badge ba">Warning</span>'
-    return '<span class="badge br">Behind</span>'
-
-def badge_cpi(val):
-    if val >= 1.0: return '<span class="badge bg">Under Budget</span>'
-    if val >= 0.9: return '<span class="badge ba">Warning</span>'
-    return '<span class="badge br">Over Budget</span>'
