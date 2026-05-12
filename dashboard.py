@@ -1,18 +1,22 @@
 # ============================================================
 #  5D BIM Construction Dashboard  –  Dark Neon Fitness Theme
+#  (All critical fixes, EVM metrics, Gantt, security)
 # ============================================================
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.figure_factory as ff
 import numpy as np
 from supabase import create_client
 import os
 from datetime import datetime, timedelta
 import io
+import html
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # ===== CONFIGURATION =====
 SUPABASE_URL = st.secrets["supabase_url"] if "supabase_url" in st.secrets else os.environ.get("SUPABASE_URL", "")
@@ -26,7 +30,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ============================  MASTER CSS  ============================
+# ============================  MASTER CSS ============================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -312,24 +316,14 @@ def dark_fig(fig):
         plot_bgcolor=DARK_BG,
         font=dict(family="DM Sans", color=TEXT_CLR, size=11),
         margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(
-            bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#6a8ab0", size=10),
-        ),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#6a8ab0", size=10)),
     )
-    fig.update_xaxes(
-        gridcolor=GRID_CLR, showgrid=False,
-        linecolor=GRID_CLR, tickfont=dict(color=TEXT_CLR, size=10),
-    )
-    fig.update_yaxes(
-        gridcolor=GRID_CLR, showgrid=True,
-        linecolor="rgba(0,0,0,0)",
-        tickfont=dict(color=TEXT_CLR, size=10),
-    )
+    fig.update_xaxes(gridcolor=GRID_CLR, showgrid=False, linecolor=GRID_CLR, tickfont=dict(color=TEXT_CLR, size=10))
+    fig.update_yaxes(gridcolor=GRID_CLR, showgrid=True, linecolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT_CLR, size=10))
     return fig
 
 
-# ============================  SUPABASE  ============================
+# ============================  SUPABASE (with error handling) ============================
 @st.cache_resource
 def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -338,44 +332,54 @@ supabase = init_supabase()
 
 @st.cache_data(ttl=60)
 def load_projects():
-    return pd.DataFrame(supabase.table("projects").select("*").execute().data)
+    try:
+        return pd.DataFrame(supabase.table("projects").select("*").execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load projects: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_elements(pid):
-    return pd.DataFrame(
-        supabase.table("elements").select("*")
-        .eq("project_id", pid).eq("is_primary", True).execute().data
-    )
+    try:
+        return pd.DataFrame(supabase.table("elements").select("*").eq("project_id", pid).eq("is_primary", True).execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load elements: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_schedule(pid):
-    return pd.DataFrame(
-        supabase.table("schedule_tasks").select("*").eq("project_id", pid).execute().data
-    )
+    try:
+        return pd.DataFrame(supabase.table("schedule_tasks").select("*").eq("project_id", pid).execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load schedule: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_comments(pid):
-    return pd.DataFrame(
-        supabase.table("comments").select("*")
-        .eq("project_id", pid).order("created_at", desc=True).execute().data
-    )
+    try:
+        return pd.DataFrame(supabase.table("comments").select("*").eq("project_id", pid).order("created_at", desc=True).execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load comments: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_photos(pid):
-    return pd.DataFrame(
-        supabase.table("photos").select("*")
-        .eq("project_id", pid).order("uploaded_at", desc=True).execute().data
-    )
+    try:
+        return pd.DataFrame(supabase.table("photos").select("*").eq("project_id", pid).order("uploaded_at", desc=True).execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load photos: {e}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def load_spi_history(pid):
-    return pd.DataFrame(
-        supabase.table("spi_history").select("*")
-        .eq("project_id", pid).order("recorded_at", desc=True).execute().data
-    )
+    try:
+        return pd.DataFrame(supabase.table("spi_history").select("*").eq("project_id", pid).order("recorded_at", desc=True).execute().data)
+    except Exception as e:
+        st.error(f"❌ Could not load SPI history: {e}")
+        return pd.DataFrame()
 
 
-# ============================  LOAD DATA  ============================
+# ============================  LOAD DATA ============================
 projects_df = load_projects()
 if projects_df.empty:
     st.warning("No projects found.")
@@ -395,10 +399,14 @@ if elements_df.empty or schedule_df.empty:
     st.warning("No data. Run sync tool first.")
     st.stop()
 
-# ---- Merge & compute ----
+# ---- Merge & compute (safe division) ----
 merged = pd.merge(elements_df, schedule_df, on="task_id", how="inner")
-merged["SPI"]        = merged["earned_value"] / merged["planned_value"]
-merged["CPI"]        = merged["earned_value"] / merged["actual_cost"]
+# Replace zero denominators with NaN to avoid division by zero
+merged["SPI"] = merged["earned_value"] / merged["planned_value"].replace(0, np.nan)
+merged["CPI"] = merged["earned_value"] / merged["actual_cost"].replace(0, np.nan)
+# Clip extreme values to avoid broken charts
+merged["SPI"] = merged["SPI"].clip(upper=3.0)
+merged["CPI"] = merged["CPI"].clip(upper=3.0)
 merged["Delayed"]    = merged["SPI"] < 1.0
 merged["OverBudget"] = merged["CPI"] < 1.0
 
@@ -412,7 +420,7 @@ if extra_cost != current_extra:
     supabase.table("projects").update({"extra_cost": extra_cost}).eq("id", project_id).execute()
     st.sidebar.success("Extra cost updated")
 
-# ============================  FILTER STATE (session_state — widgets live at bottom) ============================
+# ============================  FILTER STATE (session_state) ============================
 _all_cats   = list(merged["category"].unique())
 _status_all = ["On Track", "Delayed", "Over Budget", "Delayed & Over"]
 _spi_min    = float(merged["SPI"].min()); _spi_max = float(merged["SPI"].max())
@@ -445,19 +453,27 @@ filtered = merged[
     (merged["CPI"].between(cpi_low, cpi_high))
 ]
 
-# ---- Helper functions (defined here; expanders rendered at bottom) ----
+# ---- Helper functions (optimised) ----
 def recalc_costs():
-    count = 0
+    # One call to get all quantity mappings
+    mappings = supabase.table("quantity_mapping").select("category", "quantity_type").execute()
+    mapping_dict = {row["category"]: row["quantity_type"] for row in mappings.data}
+    updates = []
     for _, elem in elements_df.iterrows():
-        map_res  = supabase.table("quantity_mapping").select("quantity_type").eq("category", elem.get("category","")).execute()
-        if not map_res.data: continue
-        qty_type = map_res.data[0]["quantity_type"]
-        quantity = {"Volume": elem.get("volume",0),"Area": elem.get("area",0),
-                    "Length": elem.get("length",0),"Count": elem.get("count",1)}.get(qty_type, 1) or 1
-        unit_cost = elem.get("unit_cost",0) or 0
-        supabase.table("elements").update({"total_cost": quantity*unit_cost}).eq("id", elem["id"]).execute()
-        count += 1
-    return count
+        qty_type = mapping_dict.get(elem.get("category", ""))
+        if not qty_type:
+            continue
+        quantity = {
+            "Volume": elem.get("volume", 0),
+            "Area":   elem.get("area", 0),
+            "Length": elem.get("length", 0),
+            "Count":  elem.get("count", 1),
+        }.get(qty_type, 1) or 1
+        unit_cost = elem.get("unit_cost", 0) or 0
+        updates.append({"id": elem["id"], "total_cost": quantity * unit_cost})
+    if updates:
+        supabase.table("elements").upsert(updates).execute()
+    return len(updates)
 
 def update_progress_from_photos():
     photos = supabase.table("photos").select("task_id","completion_status","uploaded_at").eq("project_id", project_id).execute()
@@ -476,11 +492,10 @@ def update_progress_from_photos():
     return count
 
 
-# ============================  COMPUTE KPIs  ============================
+# ============================  COMPUTE KPIs & EVM Metrics ============================
 total_pv = filtered["planned_value"].sum()
 total_ev = filtered["earned_value"].sum()
 total_ac = filtered["actual_cost"].sum()
-
 overall_spi      = total_ev / total_pv if total_pv else 1.0
 overall_cpi      = total_ev / total_ac if total_ac else 1.0
 overall_progress = (filtered["percent_complete"] * filtered["planned_value"]).sum() / total_pv if total_pv else 0
@@ -489,7 +504,13 @@ num_elements     = len(filtered)
 num_categories   = filtered["category"].nunique()
 delayed_count    = filtered["Delayed"].sum()
 overbudget_count = filtered["OverBudget"].sum()
-on_track         = num_elements - int(delayed_count) - int(overbudget_count)
+# CORRECT on_track using boolean filter (no double subtraction)
+on_track = int(((~filtered["Delayed"]) & (~filtered["OverBudget"])).sum())
+
+# Additional EVM metrics
+EAC  = total_pv / overall_cpi if overall_cpi and overall_cpi != 0 else total_pv
+ETC  = EAC - total_ac
+TCPI = (total_pv - total_ev) / (total_pv - total_ac) if (total_pv - total_ac) != 0 else 1.0
 
 variance_cost  = total_ev - total_ac
 variance_sched = total_ev - total_pv
@@ -497,24 +518,36 @@ variance_sched = total_ev - total_pv
 today_str  = datetime.now().strftime("%b %d, %Y")
 clock_str  = datetime.now().strftime("%H:%M")
 
-# ── Generate weekly synthetic bar data (7 days, based on category SPI distribution)
-cats       = filtered["category"].unique()[:7]
-weekly_spis = [max(0.2, min(1.0, filtered[filtered["category"]==c]["SPI"].mean())) if c in filtered["category"].values else 0.3 for c in cats]
-while len(weekly_spis) < 7: weekly_spis.append(0)
-weekly_spis = weekly_spis[:7]
-max_spi    = max(weekly_spis) if max(weekly_spis) > 0 else 1
-bar_pcts   = [v / max_spi for v in weekly_spis]
-DAYS       = ["S","M","T","W","T","F","S"]
+# ---- Real weekly progress (based on schedule dates) ----
+if "planned_start" in schedule_df.columns and "planned_finish" in schedule_df.columns:
+    schedule_df["planned_start"] = pd.to_datetime(schedule_df["planned_start"])
+    schedule_df["planned_finish"] = pd.to_datetime(schedule_df["planned_finish"])
+    last_7_days = [(datetime.now() - timedelta(days=i)).date() for i in range(6, -1, -1)]
+    daily_progress = []
+    for day in last_7_days:
+        tasks_should_have_started = schedule_df[schedule_df["planned_start"].dt.date <= day]
+        avg_complete = tasks_should_have_started["percent_complete"].mean() / 100 if len(tasks_should_have_started) else 0
+        daily_progress.append(avg_complete)
+    bar_pcts = daily_progress
+    DAYS = ["S","M","T","W","T","F","S"]
+else:
+    # Fallback: SPI by category (honest label)
+    cats = filtered["category"].unique()[:7]
+    weekly_spis = [max(0.2, min(1.0, filtered[filtered["category"]==c]["SPI"].mean())) if c in filtered["category"].values else 0.3 for c in cats]
+    while len(weekly_spis) < 7: weekly_spis.append(0)
+    max_spi    = max(weekly_spis) if max(weekly_spis) > 0 else 1
+    bar_pcts   = [v / max_spi for v in weekly_spis]
+    DAYS       = [c[:3].upper() for c in cats] if len(cats) == 7 else ["WAL","COL","ROO","FLO","DOO","WIN","OTH"]
 
 def badge(val, lo=0.95, hi=1.0):
-    if val >= hi: return f'<span class="badge bg">On Track</span>'
-    if val >= lo: return f'<span class="badge ba">Warning</span>'
-    return f'<span class="badge br">Behind</span>'
+    if val >= hi: return '<span class="badge bg">On Track</span>'
+    if val >= lo: return '<span class="badge ba">Warning</span>'
+    return '<span class="badge br">Behind</span>'
 
 def badge_cpi(val):
-    if val >= 1.0: return f'<span class="badge bg">Under Budget</span>'
-    if val >= 0.9: return f'<span class="badge ba">Warning</span>'
-    return f'<span class="badge br">Over Budget</span>'
+    if val >= 1.0: return '<span class="badge bg">Under Budget</span>'
+    if val >= 0.9: return '<span class="badge ba">Warning</span>'
+    return '<span class="badge br">Over Budget</span>'
 
 def progress_bar(pct, pink=False):
     cls = "pbar-fill-pink" if pink else "pbar-fill"
@@ -530,24 +563,23 @@ def mini_bars_html(heights, days=DAYS):
     return f'<div class="mini-bars">{bars}</div><div class="day-row">{day_spans}</div>'
 
 
-# ============================  DASHBOARD HEADER  ============================
+# ============================  DASHBOARD HEADER + CAPTION ============================
 st.markdown(f"""
 <div class="dash-header">
   <div>
     <div class="dash-title">🏗️ {selected_project}</div>
     <div class="dash-sub">5D BIM · Construction Performance Dashboard</div>
   </div>
-  <div class="dash-time">
-    {clock_str}<br>{today_str}
-  </div>
+  <div class="dash-time">{clock_str}<br>{today_str}</div>
 </div>
 """, unsafe_allow_html=True)
+st.caption("📌 SPI < 1 = behind schedule | CPI < 1 = over budget | EAC = Estimate at Completion")
 
 
-# ============================  ROW 1 — OVERVIEW CARDS  ============================
+# ============================  ROW 1 — OVERVIEW CARDS ============================
 c1, c2, c3 = st.columns([1, 1, 1], gap="small")
 
-# ── Card 1: "This Week" (week-summary + mini bar chart)
+# Card 1: "This Week" (weekly progress mini‑bar)
 with c1:
     prog_pct = overall_progress * 100
     st.markdown(f"""
@@ -569,7 +601,7 @@ with c1:
     </div>
     """, unsafe_allow_html=True)
 
-# ── Card 2: "Today" — 3 inline KPI rows
+# Card 2: "Today" — three inline KPI rows
 with c2:
     ev_disp  = f"{total_ev/1e6:.2f}M" if total_ev >= 1e6 else f"{total_ev:,.0f}"
     pv_disp  = f"{total_pv/1e6:.2f}M" if total_pv >= 1e6 else f"{total_pv:,.0f}"
@@ -605,7 +637,7 @@ with c2:
     </div>
     """, unsafe_allow_html=True)
 
-# ── Card 3: SPI / CPI gauges (small bar-style)
+# Card 3: SPI/CPI gauges + EAC/ETC/TCPI
 with c3:
     spi_pct = min(overall_spi, 1.5) / 1.5
     cpi_pct = min(overall_cpi, 1.5) / 1.5
@@ -613,7 +645,7 @@ with c3:
     cpi_col = "#00ff88" if overall_cpi >= 1.0 else ("#ffb700" if overall_cpi >= 0.9 else "#ff6b6b")
     st.markdown(f"""
     <div class="card-dark" style="box-shadow:0 0 22px rgba(168,85,247,0.1)">
-      <div class="section-header">Performance</div>
+      <div class="section-header">Performance & Forecast</div>
       <div style="margin-bottom:1rem">
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <div class="label">Schedule Performance</div>
@@ -632,9 +664,16 @@ with c3:
           <div style="height:100%;border-radius:999px;width:{cpi_pct*100:.1f}%;background:{cpi_col};transition:width .5s"></div>
         </div>
       </div>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-        <span class="badge {'bg' if overall_spi>=0.95 else 'br'}">{delayed_count} delayed</span>
-        <span class="badge {'bg' if overall_cpi>=1.0 else 'br'}">{overbudget_count} over budget</span>
+      <div class="div" style="background:rgba(255,255,255,.1)"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem">
+        <div><span class="label">EAC</span><div class="sm-val" style="font-size:1rem">{EAC/1e6:.2f}M</div></div>
+        <div><span class="label">ETC</span><div class="sm-val" style="font-size:1rem">{ETC/1e6:.2f}M</div></div>
+        <div><span class="label">TCPI</span><div class="sm-val" style="font-size:1rem">{TCPI:.3f}</div></div>
+        <div><span class="label">Progress</span><div class="sm-val" style="font-size:1rem">{overall_progress*100:.0f}%</div></div>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem">
+        <span class="badge {'bg' if overall_spi>=0.95 else 'br'}">{int(delayed_count)} delayed</span>
+        <span class="badge {'bg' if overall_cpi>=1.0 else 'br'}">{int(overbudget_count)} over budget</span>
       </div>
       <div class="brand">BIM</div>
     </div>
@@ -643,133 +682,69 @@ with c3:
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 2 — GRADIENT CARD + DONUT  ============================
+# ============================  ROW 2 — GRADIENT CARD + DONUT ============================
 col_left, col_right = st.columns([3, 2], gap="small")
 
-# ── Left: Large gradient KPI card (purple→pink like image)
 with col_left:
     vcost_disp   = f"+{variance_cost/1e3:.0f}K" if variance_cost >= 0 else f"{variance_cost/1e3:.0f}K"
     vsched_disp  = f"+{variance_sched/1e3:.0f}K" if variance_sched >= 0 else f"{variance_sched/1e3:.0f}K"
     vcost_col    = "#00ff88" if variance_cost >= 0 else "#ff6b6b"
     vsched_col   = "#00ff88" if variance_sched >= 0 else "#ff6b6b"
     total_length_disp = f"{total_length:,.1f}" if total_length else "—"
-
     st.markdown(f"""
     <div class="card-gradient">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem">
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.5)">Planned Value</div>
-          <div class="med-val">{total_pv/1e6:.2f}M</div>
-          <div style="font-size:.6rem;color:rgba(255,255,255,.35)">KES</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.5)">Earned Value</div>
-          <div class="med-val">{total_ev/1e6:.2f}M</div>
-          <div style="font-size:.6rem;color:rgba(255,255,255,.35)">KES</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.5)">Actual Cost</div>
-          <div class="med-val">{total_ac/1e6:.2f}M</div>
-          <div style="font-size:.6rem;color:rgba(255,255,255,.35)">KES</div>
-        </div>
+        <div><div class="label" style="color:rgba(255,255,255,.5)">Planned Value</div><div class="med-val">{total_pv/1e6:.2f}M</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.5)">Earned Value</div><div class="med-val">{total_ev/1e6:.2f}M</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.5)">Actual Cost</div><div class="med-val">{total_ac/1e6:.2f}M</div></div>
       </div>
       <div class="div" style="background:rgba(255,255,255,.12)"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.8rem">
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">SPI</div>
-          <div class="sm-val">{overall_spi:.3f}</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">CPI</div>
-          <div class="sm-val">{overall_cpi:.3f}</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Cost Var</div>
-          <div class="sm-val" style="color:{vcost_col}">{vcost_disp}</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Sched Var</div>
-          <div class="sm-val" style="color:{vsched_col}">{vsched_disp}</div>
-        </div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">SPI</div><div class="sm-val">{overall_spi:.3f}</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">CPI</div><div class="sm-val">{overall_cpi:.3f}</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Cost Var</div><div class="sm-val" style="color:{vcost_col}">{vcost_disp}</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Sched Var</div><div class="sm-val" style="color:{vsched_col}">{vsched_disp}</div></div>
       </div>
       <div class="div" style="background:rgba(255,255,255,.12)"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.8rem">
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Elements</div>
-          <div class="sm-val">{num_elements}</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Categories</div>
-          <div class="sm-val">{num_categories}</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Length</div>
-          <div class="sm-val">{total_length_disp} m</div>
-        </div>
-        <div>
-          <div class="label" style="color:rgba(255,255,255,.45)">Extra Cost</div>
-          <div class="sm-val">{extra_cost:,.0f}</div>
-        </div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Elements</div><div class="sm-val">{num_elements}</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Categories</div><div class="sm-val">{num_categories}</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Length</div><div class="sm-val">{total_length_disp} m</div></div>
+        <div><div class="label" style="color:rgba(255,255,255,.45)">Extra Cost</div><div class="sm-val">{extra_cost:,.0f}</div></div>
       </div>
       <div class="brand" style="color:rgba(255,255,255,.2)">BIM</div>
     </div>
     """, unsafe_allow_html=True)
 
-# ── Right: Donut ring (multi-color, like the fitness app)
 with col_right:
     cat_ev = filtered.groupby("category")["earned_value"].sum().reset_index()
     ring_colors = ["#00aaff","#ff3d9a","#00ff88","#ffb700","#a855f7","#ff8c42","#00e0cc"]
-
     fig_donut = go.Figure(go.Pie(
-        labels=cat_ev["category"],
-        values=cat_ev["earned_value"],
-        hole=0.62,
+        labels=cat_ev["category"], values=cat_ev["earned_value"], hole=0.62,
         marker=dict(colors=ring_colors[:len(cat_ev)], line=dict(color="#090b0f", width=3)),
-        textinfo="none",
-        hovertemplate="<b>%{label}</b><br>EV: %{value:,.0f}<extra></extra>",
+        textinfo="none", hovertemplate="<b>%{label}</b><br>EV: %{value:,.0f}<extra></extra>",
     ))
-    fig_donut.add_annotation(
-        text=f"<b>{overall_progress*100:.0f}%</b><br><span style='font-size:9px'>Done</span>",
-        x=0.5, y=0.5, showarrow=False, font=dict(size=18, color="#eef4ff"), align="center",
-    )
-    fig_donut.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=True,
-        legend=dict(
-            bgcolor="rgba(0,0,0,0)", font=dict(color="#5a6a8a", size=9),
-            orientation="v", x=1, y=0.5,
-        ),
-        margin=dict(l=0, r=80, t=10, b=10),
-        height=220,
-    )
+    fig_donut.add_annotation(text=f"<b>{overall_progress*100:.0f}%</b><br><span style='font-size:9px'>Done</span>",
+                             x=0.5, y=0.5, showarrow=False, font=dict(size=18, color="#eef4ff"), align="center")
+    fig_donut.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=True,
+                            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#5a6a8a", size=9),
+                                        orientation="v", x=1, y=0.5), margin=dict(l=0, r=80, t=10, b=10), height=220)
     st.markdown('<div class="card-dark" style="padding:.8rem;box-shadow:0 0 22px rgba(168,85,247,0.1)">'
                 '<div class="section-header">EV by Category</div>', unsafe_allow_html=True)
     st.plotly_chart(fig_donut, use_container_width=True, config={"displayModeBar": False})
     st.markdown("</div>", unsafe_allow_html=True)
 
-
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 3 — BAR CHARTS  ============================
+# ============================  ROW 3 — BAR CHARTS ============================
 bc1, bc2 = st.columns([1, 1], gap="small")
 
 with bc1:
     cat_summary = filtered.groupby("category").agg({"planned_value": "sum", "actual_cost": "sum"}).reset_index()
     fig_bar = go.Figure()
-    fig_bar.add_trace(go.Bar(
-        name="Planned", x=cat_summary["category"], y=cat_summary["planned_value"],
-        marker_color=BLUE, marker_line_width=0, opacity=0.85,
-    ))
-    fig_bar.add_trace(go.Bar(
-        name="Actual Cost", x=cat_summary["category"], y=cat_summary["actual_cost"],
-        marker_color=GREEN, marker_line_width=0, opacity=0.85,
-    ))
-    fig_bar.update_layout(
-        barmode="group", title="Planned vs Actual Cost",
-        title_font=dict(color="#8aa2c0", size=12),
-        height=260,
-    )
+    fig_bar.add_trace(go.Bar(name="Planned", x=cat_summary["category"], y=cat_summary["planned_value"], marker_color=BLUE, opacity=0.85))
+    fig_bar.add_trace(go.Bar(name="Actual Cost", x=cat_summary["category"], y=cat_summary["actual_cost"], marker_color=GREEN, opacity=0.85))
+    fig_bar.update_layout(barmode="group", title="Planned vs Actual Cost", title_font=dict(color="#8aa2c0", size=12), height=260)
     dark_fig(fig_bar)
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
@@ -778,49 +753,31 @@ with bc1:
 with bc2:
     cat_spi = filtered.groupby("category").agg({"SPI": "mean", "CPI": "mean"}).reset_index()
     fig_spi = go.Figure()
-    fig_spi.add_trace(go.Bar(
-        name="SPI", x=cat_spi["category"], y=cat_spi["SPI"],
-        marker_color=PINK, marker_line_width=0, opacity=0.9,
-    ))
-    fig_spi.add_trace(go.Bar(
-        name="CPI", x=cat_spi["category"], y=cat_spi["CPI"],
-        marker_color=AMBER, marker_line_width=0, opacity=0.9,
-    ))
+    fig_spi.add_trace(go.Bar(name="SPI", x=cat_spi["category"], y=cat_spi["SPI"], marker_color=PINK, opacity=0.9))
+    fig_spi.add_trace(go.Bar(name="CPI", x=cat_spi["category"], y=cat_spi["CPI"], marker_color=AMBER, opacity=0.9))
     fig_spi.add_hline(y=1.0, line_dash="dot", line_color=GREEN, line_width=1,
                       annotation_text="Target 1.0", annotation_font_color=GREEN, annotation_font_size=9)
-    fig_spi.update_layout(
-        barmode="group", title="SPI & CPI by Category",
-        title_font=dict(color="#8aa2c0", size=12), height=260,
-    )
+    fig_spi.update_layout(barmode="group", title="SPI & CPI by Category", title_font=dict(color="#8aa2c0", size=12), height=260)
     dark_fig(fig_spi)
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.plotly_chart(fig_spi, use_container_width=True, config={"displayModeBar": False})
     st.markdown("</div>", unsafe_allow_html=True)
 
-
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 4 — COST BREAKDOWN + DELAY WARNING  ============================
+# ============================  ROW 4 — COST BREAKDOWN + DELAY INTELLIGENCE ============================
 r4c1, r4c2 = st.columns([1, 1], gap="small")
 
 with r4c1:
     cost_by_cat = filtered.groupby("category")["total_cost"].sum().reset_index()
-    fig_pie = go.Figure(go.Pie(
-        labels=cost_by_cat["category"], values=cost_by_cat["total_cost"],
-        hole=0.5,
-        marker=dict(colors=ring_colors[:len(cost_by_cat)], line=dict(color="#090b0f", width=2)),
-        textinfo="percent",
-        textfont=dict(size=9, color="#eef4ff"),
-        hovertemplate="<b>%{label}</b><br>%{value:,.0f} KES<extra></extra>",
-    ))
-    fig_pie.update_layout(
-        title="Cost Breakdown by Category",
-        title_font=dict(color="#8aa2c0", size=12),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        height=280,
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#5a6a8a", size=9)),
-        margin=dict(l=0, r=10, t=35, b=0),
-    )
+    fig_pie = go.Figure(go.Pie(labels=cost_by_cat["category"], values=cost_by_cat["total_cost"], hole=0.5,
+                               marker=dict(colors=ring_colors[:len(cost_by_cat)], line=dict(color="#090b0f", width=2)),
+                               textinfo="percent", textfont=dict(size=9, color="#eef4ff"),
+                               hovertemplate="<b>%{label}</b><br>%{value:,.0f} KES<extra></extra>"))
+    fig_pie.update_layout(title="Cost Breakdown by Category", title_font=dict(color="#8aa2c0", size=12),
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=280,
+                          legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#5a6a8a", size=9)),
+                          margin=dict(l=0, r=10, t=35, b=0))
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
     st.markdown("</div>", unsafe_allow_html=True)
@@ -828,11 +785,9 @@ with r4c1:
 with r4c2:
     st.markdown('<div class="card" style="height:100%">', unsafe_allow_html=True)
     st.markdown('<div class="section-header">🔮 Delay Intelligence</div>', unsafe_allow_html=True)
-
     if not spi_history_df.empty:
         spi_history_df["recorded_at"] = pd.to_datetime(spi_history_df["recorded_at"])
-        spi_trend = (spi_history_df
-                     .sort_values(["task_id","recorded_at"], ascending=[True, False])
+        spi_trend = (spi_history_df.sort_values(["task_id","recorded_at"], ascending=[True, False])
                      .groupby("task_id").head(3))
         decreasing = []
         for tid, grp in spi_trend.groupby("task_id"):
@@ -855,120 +810,149 @@ with r4c2:
             </div>
             """, unsafe_allow_html=True)
     else:
-        st.markdown("""
-        <div style="color:#5a6a8a;font-size:.72rem;padding:.5rem 0">
-          Run sync tool 3+ times to enable trend analysis
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.markdown("""<div style="color:#5a6a8a;font-size:.72rem;padding:.5rem 0">Run sync tool 3+ times to enable trend analysis</div>""", unsafe_allow_html=True)
     st.markdown(f"""
     <div class="div"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem">
       <div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.15);border-radius:12px;padding:.7rem">
-        <div class="label">Delayed Tasks</div>
-        <div class="med-val" style="color:#ff6b6b">{int(delayed_count)}</div>
+        <div class="label">Delayed Tasks</div><div class="med-val" style="color:#ff6b6b">{int(delayed_count)}</div>
       </div>
       <div style="background:rgba(255,183,0,.07);border:1px solid rgba(255,183,0,.15);border-radius:12px;padding:.7rem">
-        <div class="label">Over Budget</div>
-        <div class="med-val" style="color:#ffb700">{int(overbudget_count)}</div>
+        <div class="label">Over Budget</div><div class="med-val" style="color:#ffb700">{int(overbudget_count)}</div>
       </div>
       <div style="background:rgba(0,255,136,.07);border:1px solid rgba(0,255,136,.15);border-radius:12px;padding:.7rem">
-        <div class="label">On Track</div>
-        <div class="med-val" style="color:#00ff88">{on_track}</div>
+        <div class="label">On Track</div><div class="med-val" style="color:#00ff88">{on_track}</div>
       </div>
       <div style="background:rgba(0,160,255,.07);border:1px solid rgba(0,160,255,.15);border-radius:12px;padding:.7rem">
-        <div class="label">Categories</div>
-        <div class="med-val" style="color:#00aaff">{num_categories}</div>
+        <div class="label">Categories</div><div class="med-val" style="color:#00aaff">{num_categories}</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 5 — RISK HEATMAP  ============================
+# ============================  ROW 5 — RISK HEATMAP ============================
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown('<div class="section-header">⚠️ Risk Heatmap</div>', unsafe_allow_html=True)
-
 heat_cols = ["task_id","category","SPI","CPI","Delayed","OverBudget"]
 heat_df   = filtered[heat_cols].copy()
 heat_df["SPI"] = heat_df["SPI"].map("{:.3f}".format)
 heat_df["CPI"] = heat_df["CPI"].map("{:.3f}".format)
-
 def color_risk(val):
     try:
         v = float(val)
-        if v < 0.8:  return "background-color:#3d0f0f;color:#ff6b6b"
+        if v < 0.8: return "background-color:#3d0f0f;color:#ff6b6b"
         if v < 0.95: return "background-color:#3d2e0f;color:#ffb700"
         return "background-color:#0f2e1a;color:#00ff88"
     except:
         return ""
-
 styled_heat = heat_df.style.map(color_risk, subset=["SPI","CPI"])
 st.dataframe(styled_heat, use_container_width=True, height=280)
 st.markdown("</div>", unsafe_allow_html=True)
 
-
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 6 — MONTE CARLO  ============================
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.markdown('<div class="section-header">🎲 Monte Carlo Simulation</div>', unsafe_allow_html=True)
-
+# ============================  ROW 6 — MONTE CARLO & GANTT ============================
 mc_c1, mc_c2 = st.columns([3, 1], gap="small")
+
+# Pre‑compute simulation results
+num_sim = st.slider("Simulations", 100, 2000, 500, step=100, key="mc_sim")
+spi_vals = filtered["SPI"].dropna()
+
+# Compute real planned duration from schedule dates (if available)
+planned_duration = 100
+if "planned_start" in schedule_df.columns and "planned_finish" in schedule_df.columns:
+    sched_copy = schedule_df.copy()
+    sched_copy["planned_start"] = pd.to_datetime(sched_copy["planned_start"])
+    sched_copy["planned_finish"] = pd.to_datetime(sched_copy["planned_finish"])
+    if not sched_copy["planned_start"].isna().all() and not sched_copy["planned_finish"].isna().all():
+        proj_start = sched_copy["planned_start"].min()
+        proj_end = sched_copy["planned_finish"].max()
+        planned_duration = (proj_end - proj_start).days or 100
+
+sim_dur = None
+p50 = p80 = p90 = None
+if len(spi_vals) > 0:
+    sim_spi = np.random.choice(spi_vals, size=(num_sim, len(spi_vals)), replace=True)
+    sim_dur = planned_duration / sim_spi.mean(axis=1)
+    p50, p80, p90 = np.percentile(sim_dur, [50, 80, 90])
+
 with mc_c1:
-    num_sim  = st.slider("Simulations", 100, 2000, 500, step=100)
-    spi_vals = filtered["SPI"].dropna()
-    if len(spi_vals) > 0:
-        sim_spi = np.random.choice(spi_vals, size=(num_sim, max(len(spi_vals),1)), replace=True)
-        sim_dur = 100 / sim_spi.mean(axis=1)
-        fig_mc  = px.histogram(
-            sim_dur, nbins=50,
-            color_discrete_sequence=[BLUE],
-            opacity=0.8,
-        )
-        fig_mc.add_vline(x=100, line_dash="dot", line_color=GREEN, line_width=1.5,
-                         annotation_text="Baseline 100d", annotation_font_color=GREEN, annotation_font_size=9)
-        fig_mc.add_vline(x=np.percentile(sim_dur,80), line_dash="dash", line_color=PINK, line_width=1.5,
-                         annotation_text=f"P80={np.percentile(sim_dur,80):.0f}d",
-                         annotation_font_color=PINK, annotation_font_size=9)
-        fig_mc.update_layout(
-            title="Simulated Project Duration (days)",
-            title_font=dict(color="#8aa2c0", size=12),
-            showlegend=False, height=220,
-            xaxis_title="Duration (days)", yaxis_title="Frequency",
-        )
+    st.markdown('<div class="card" style="height:100%">', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🎲 Monte Carlo Simulation</div>', unsafe_allow_html=True)
+    if sim_dur is not None:
+        fig_mc = px.histogram(sim_dur, nbins=50, color_discrete_sequence=[BLUE], opacity=0.8)
+        fig_mc.add_vline(x=planned_duration, line_dash="dot", line_color=GREEN, line_width=1.5,
+                         annotation_text="Baseline", annotation_font_color=GREEN, annotation_font_size=9)
+        fig_mc.add_vline(x=p80, line_dash="dash", line_color=PINK, line_width=1.5,
+                         annotation_text=f"P80={p80:.0f}d", annotation_font_color=PINK, annotation_font_size=9)
+        fig_mc.update_layout(title="Simulated Project Duration (days)", title_font=dict(color="#8aa2c0", size=12),
+                             showlegend=False, height=220, xaxis_title="Duration (days)", yaxis_title="Frequency")
         dark_fig(fig_mc)
         st.plotly_chart(fig_mc, use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.info("Not enough SPI data for simulation.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 with mc_c2:
-    if len(spi_vals) > 0:
-        p50 = np.percentile(sim_dur, 50)
-        p80 = np.percentile(sim_dur, 80)
-        p90 = np.percentile(sim_dur, 90)
+    st.markdown('<div class="card-dark" style="height:100%">', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">📊 Forecast</div>', unsafe_allow_html=True)
+    if p50 is not None:
         st.markdown(f"""
-        <div style="display:flex;flex-direction:column;gap:.6rem;padding-top:.5rem">
-          <div style="background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.2);border-radius:12px;padding:.7rem">
-            <div class="label">P50 Duration</div>
-            <div class="med-val" style="color:#00ff88">{p50:.0f}<span class="sub">days</span></div>
-          </div>
-          <div style="background:rgba(255,61,154,.08);border:1px solid rgba(255,61,154,.2);border-radius:12px;padding:.7rem">
-            <div class="label">P80 Duration</div>
-            <div class="med-val" style="color:#ff3d9a">{p80:.0f}<span class="sub">days</span></div>
-          </div>
-          <div style="background:rgba(255,183,0,.08);border:1px solid rgba(255,183,0,.2);border-radius:12px;padding:.7rem">
-            <div class="label">P90 Duration</div>
-            <div class="med-val" style="color:#ffb700">{p90:.0f}<span class="sub">days</span></div>
-          </div>
+        <div style="background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.2);border-radius:12px;padding:.7rem;margin-bottom:.6rem">
+          <div class="label">P50 Duration</div><div class="med-val" style="color:#00ff88">{p50:.0f}<span class="sub">days</span></div>
+        </div>
+        <div style="background:rgba(255,61,154,.08);border:1px solid rgba(255,61,154,.2);border-radius:12px;padding:.7rem;margin-bottom:.6rem">
+          <div class="label">P80 Duration</div><div class="med-val" style="color:#ff3d9a">{p80:.0f}<span class="sub">days</span></div>
+        </div>
+        <div style="background:rgba(255,183,0,.08);border:1px solid rgba(255,183,0,.2);border-radius:12px;padding:.7rem">
+          <div class="label">P90 Duration</div><div class="med-val" style="color:#ffb700">{p90:.0f}<span class="sub">days</span></div>
         </div>
         """, unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-
+    else:
+        st.write("No forecast")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  ROW 7 — PHOTOS + COMMENTS  ============================
+# Gantt chart (full width)
+st.markdown('<div class="card">', unsafe_allow_html=True)
+st.markdown('<div class="section-header">📅 Project Schedule (Gantt)</div>', unsafe_allow_html=True)
+if "planned_start" in schedule_df.columns and "planned_finish" in schedule_df.columns:
+    sched_gantt = schedule_df.copy()
+    sched_gantt["planned_start"] = pd.to_datetime(sched_gantt["planned_start"])
+    sched_gantt["planned_finish"] = pd.to_datetime(sched_gantt["planned_finish"])
+    # Merge SPI for colour coding
+    task_spi = filtered[["task_id", "SPI"]].drop_duplicates()
+    sched_gantt = sched_gantt.merge(task_spi, on="task_id", how="left")
+    sched_gantt["Status"] = sched_gantt["SPI"].apply(lambda x: "On Track" if (x and x >= 1.0) else "Delayed")
+    gantt_data = []
+    for _, row in sched_gantt.iterrows():
+        if pd.notna(row["planned_start"]) and pd.notna(row["planned_finish"]):
+            gantt_data.append(dict(
+                Task=row["task_id"],
+                Start=row["planned_start"],
+                Finish=row["planned_finish"],
+                Resource=row["Status"],
+                Complete=row.get("percent_complete", 0)
+            ))
+    if gantt_data:
+        colors_gantt = {"On Track": GREEN, "Delayed": PINK}
+        fig_gantt = ff.create_gantt(gantt_data, colors=colors_gantt, index_col="Resource", show_colorbar=True,
+                                     group_tasks=True, title="", height=400)
+        fig_gantt.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                 font=dict(color="#5a6a8a"), legend=dict(font=dict(color="#5a6a8a")))
+        st.plotly_chart(fig_gantt, use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.info("No valid date ranges for Gantt chart.")
+else:
+    st.info("Schedule missing start/finish dates.")
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+# ============================  ROW 7 — PHOTOS + COMMENTS ============================
 ph_col, cm_col = st.columns([1, 1], gap="small")
 
 with ph_col:
@@ -976,10 +960,10 @@ with ph_col:
     st.markdown('<div class="section-header">📸 Site Photos</div>', unsafe_allow_html=True)
     if not photos_df.empty:
         for _, row in photos_df.iterrows():
-            st.image(row["file_path"], caption=row.get("caption",""), use_column_width=True)
+            st.image(row["file_path"], caption=row.get("caption",""), use_container_width=True)
             if row.get("task_id"):
                 prog = schedule_df[schedule_df["task_id"] == row["task_id"]]["percent_complete"].values
-                pv   = prog[0] / 100 if len(prog) else 0
+                pv = prog[0] / 100 if len(prog) else 0
                 st.markdown(f"""
                 <div style="margin-bottom:.5rem">
                   <div style="font-size:.65rem;color:#5a6a8a;margin-bottom:3px">Task {row['task_id']} – {pv*100:.0f}% complete</div>
@@ -993,52 +977,51 @@ with ph_col:
 with cm_col:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown('<div class="section-header">💬 Comments</div>', unsafe_allow_html=True)
-
     for _, row in comments_df.iterrows():
+        escaped_user = html.escape(str(row.get("user_name", "")))
+        escaped_comment = html.escape(str(row.get("comment", "")))
         if row.get("is_emergency"):
             st.markdown(f"""
             <div style="background:rgba(255,60,60,.08);border-left:3px solid #ff6b6b;border-radius:0 10px 10px 0;padding:.5rem .75rem;margin-bottom:.5rem">
-              <div style="color:#ff6b6b;font-size:.65rem;font-weight:600">🚨 {row['user_name']}</div>
-              <div style="color:#e2eaff;font-size:.72rem;margin-top:2px">{row['comment']}</div>
+              <div style="color:#ff6b6b;font-size:.65rem;font-weight:600">🚨 {escaped_user}</div>
+              <div style="color:#e2eaff;font-size:.72rem;margin-top:2px">{escaped_comment}</div>
             </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown(f"""
             <div style="background:rgba(255,255,255,.03);border-left:3px solid #1e3050;border-radius:0 10px 10px 0;padding:.5rem .75rem;margin-bottom:.5rem">
-              <div style="color:#6ab4ff;font-size:.65rem;font-weight:600">{row['user_name']}</div>
-              <div style="color:#b0c4e0;font-size:.72rem;margin-top:2px">{row['comment']}</div>
+              <div style="color:#6ab4ff;font-size:.65rem;font-weight:600">{escaped_user}</div>
+              <div style="color:#b0c4e0;font-size:.72rem;margin-top:2px">{escaped_comment}</div>
             </div>
             """, unsafe_allow_html=True)
-
     st.markdown('<div class="div"></div>', unsafe_allow_html=True)
-
     with st.form("comment_form", clear_on_submit=True):
-        user    = st.text_input("Your name", "Anonymous")
+        user = st.text_input("Your name", "Anonymous")
         comment = st.text_area("Comment", height=70)
-        is_emg  = st.checkbox("🚨 Mark as Emergency")
+        is_emg = st.checkbox("🚨 Mark as Emergency")
         if st.form_submit_button("Post Comment"):
-            supabase.table("comments").insert({
-                "project_id": project_id,
-                "user_name": user,
-                "comment": comment,
-                "is_emergency": int(is_emg),
-            }).execute()
-            st.rerun()
-
+            if not comment.strip():
+                st.warning("Comment cannot be empty.")
+            else:
+                supabase.table("comments").insert({
+                    "project_id": project_id,
+                    "user_name": user,
+                    "comment": comment,
+                    "is_emergency": int(is_emg),
+                }).execute()
+                st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ============================  PDF EXPORT  ============================
+# ============================  PDF EXPORT (with proper table) ============================
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.markdown('<div class="section-header">📄 Export Report</div>', unsafe_allow_html=True)
-
 if st.button("📄 Generate PDF Report"):
     buffer = io.BytesIO()
-    doc    = SimpleDocTemplate(buffer, pagesize=letter)
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
-    story  = [
+    story = [
         Paragraph(f"{selected_project} – 5D BIM Report", styles["Title"]),
         Spacer(1, 12),
         Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]),
@@ -1050,7 +1033,30 @@ if st.button("📄 Generate PDF Report"):
         Paragraph(f"Actual Cost:   {total_ac:,.0f} KES", styles["Normal"]),
         Spacer(1, 6),
         Paragraph(f"Delayed Tasks: {int(delayed_count)}  |  Over Budget: {int(overbudget_count)}  |  On Track: {on_track}", styles["Normal"]),
+        Spacer(1, 12),
+        Paragraph("Category Breakdown", styles["Heading2"]),
     ]
+    # Table of categories
+    cat_data = [["Category", "Planned (KES)", "Actual (KES)", "SPI", "CPI", "Status"]]
+    for _, row in cat_summary.iterrows():
+        status = "On Track" if row["SPI"] >= 1.0 else "Delayed"
+        cat_data.append([
+            row["category"],
+            f"{row['planned_value']:,.0f}",
+            f"{row['actual_cost']:,.0f}",
+            f"{row['SPI']:.3f}",
+            f"{row['CPI']:.3f}",
+            status
+        ])
+    table = Table(cat_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2a1765")),
+        ("TEXTCOLOR",  (0,0), (-1,0), colors.white),
+        ("FONTSIZE",   (0,0), (-1,-1), 9),
+        ("GRID",       (0,0), (-1,-1), 0.5, colors.grey),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f5f5f5")]),
+    ]))
+    story.append(table)
     doc.build(story)
     st.download_button(
         "⬇️ Download PDF Report",
@@ -1058,7 +1064,6 @@ if st.button("📄 Generate PDF Report"):
         file_name=f"bim_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
         mime="application/pdf",
     )
-
 st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1070,14 +1075,11 @@ st.markdown('<div class="section-header" style="opacity:.4;font-size:.75rem;padd
 with st.expander("🔍 Filter Data", expanded=False):
     new_cats = st.multiselect("Category", options=_all_cats, default=st.session_state["f_cats"], key="f_cats_widget")
     new_status = st.multiselect("Status", _status_all, default=st.session_state["f_status"], key="f_status_widget")
-
     def _safe_slider(label, lo, hi, default, key):
         if lo == hi: lo -= 0.1; hi += 0.1
         return st.slider(label, lo, hi, default, key=key)
-
     new_spi = _safe_slider("SPI Range", _spi_min, _spi_max, st.session_state["f_spi"], "f_spi_widget")
     new_cpi = _safe_slider("CPI Range", _cpi_min, _cpi_max, st.session_state["f_cpi"], "f_cpi_widget")
-
     if st.button("Apply Filters"):
         st.session_state["f_cats"]   = new_cats
         st.session_state["f_status"] = new_status
@@ -1089,7 +1091,6 @@ with st.expander("📐 Quantity Mapping", expanded=False):
     map_response = supabase.table("quantity_mapping").select("category", "quantity_type").execute()
     map_df = pd.DataFrame(map_response.data)
     if map_df.empty:
-        # *** FIXED: default for Walls changed from Length to Area ***
         default_mapping = [
             {"category": c, "quantity_type": t} for c, t in [
                 ("Walls","Area"),("Columns","Volume"),("Structural Framing","Length"),
@@ -1098,7 +1099,18 @@ with st.expander("📐 Quantity Mapping", expanded=False):
         ]
         supabase.table("quantity_mapping").insert(default_mapping).execute()
         map_df = pd.DataFrame(default_mapping)
-    edited_map = st.data_editor(map_df, use_container_width=True, key="qty_map_editor")
+    edited_map = st.data_editor(
+        map_df,
+        use_container_width=True,
+        key="qty_map_editor",
+        column_config={
+            "quantity_type": st.column_config.SelectboxColumn(
+                "Quantity Type",
+                options=["Volume", "Area", "Length", "Count"],
+                required=True,
+            )
+        }
+    )
     if st.button("Save Quantity Mapping"):
         for _, row in edited_map.iterrows():
             supabase.table("quantity_mapping").upsert(
@@ -1114,18 +1126,21 @@ with st.expander("💰 Cost Recalculation", expanded=False):
 with st.expander("📸 Photo Progress Sync", expanded=False):
     if st.button("📸 Update Progress from Photos"):
         updated = update_progress_from_photos()
-        if updated: st.success(f"Updated {updated} tasks."); st.rerun()
-        else: st.info("No photos with Task ID found.")
+        if updated:
+            st.success(f"Updated {updated} tasks.")
+            st.rerun()
+        else:
+            st.info("No photos with Task ID found.")
 
 with st.expander("✏️ Edit Elements (Unit Cost / Task ID)", expanded=False):
-    edit_df      = elements_df[["task_id","unit_cost"]].copy()
+    edit_df = elements_df[["task_id","unit_cost"]].copy()
     edited_elems = st.data_editor(edit_df, use_container_width=True, key="elem_editor")
     if st.button("Save Element Changes"):
         for _, row in edited_elems.iterrows():
             supabase.table("elements").update({"unit_cost": row["unit_cost"]}).eq("task_id", row["task_id"]).eq("project_id", project_id).execute()
         st.success("Saved!"); st.rerun()
 
-# ============================  FOOTER  ============================
+# ============================  FOOTER ============================
 st.markdown(f"""
 <div style="text-align:center;padding:2rem 0 1rem;color:#1e2d42;font-size:.65rem;letter-spacing:2px;text-transform:uppercase">
   5D BIM Dashboard · {selected_project} · {today_str}
