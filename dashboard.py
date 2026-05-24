@@ -209,6 +209,12 @@ def scol(v): return GREEN if v>=0 else RED
 def init_sb(): return create_client(SUPABASE_URL,SUPABASE_KEY)
 supabase=init_sb()
 
+CASE_STUDY_NAME="KPA Boiler Room MBSA"
+LEGACY_CASE_STUDY_NAME="Kakamega Assembly Hall"
+
+def display_project_name(name):
+    return CASE_STUDY_NAME if str(name).strip()==LEGACY_CASE_STUDY_NAME else name
+
 def _q(fn):
     try: return fn()
     except Exception as e: st.error(f"DB error: {e}"); return []
@@ -216,7 +222,10 @@ def _q(fn):
 @st.cache_data(ttl=60)
 def load_projects():
     d=_q(lambda:supabase.table("projects").select("*").execute().data)
-    return pd.DataFrame(d)
+    df=pd.DataFrame(d)
+    if not df.empty and "name" in df.columns:
+        df["name"]=df["name"].apply(display_project_name)
+    return df
 
 @st.cache_data(ttl=60)
 def load_elements(pid):
