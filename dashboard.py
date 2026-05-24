@@ -280,6 +280,8 @@ merged["CPI"]=(merged["earned_value"]/
 # FIX 2 — cap percent_complete 0–100
 if "percent_complete" in merged.columns:
     merged["percent_complete"]=merged["percent_complete"].clip(0,100)
+if "category" in merged.columns:
+    merged["category"]=merged["category"].fillna("Uncategorized").astype(str)
 
 merged["Delayed"]   =merged["SPI"]<1.0
 merged["OverBudget"]=merged["CPI"]<1.0
@@ -303,7 +305,7 @@ cpi_warn_thresh=st.sidebar.slider("CPI Warning below",0.70,1.0,0.90,0.01)
 # ════════════════════════════════════════════════════════════
 #  FILTER STATE  (session_state; widgets at bottom)
 # ════════════════════════════════════════════════════════════
-_all_cats=list(merged["category"].unique())
+_all_cats=sorted(merged["category"].unique().tolist())
 _sta_all=["On Track","Delayed","Over Budget","Delayed & Over"]
 _spi_mn=float(merged["SPI"].min()); _spi_mx=float(merged["SPI"].max())
 _cpi_mn=float(merged["CPI"].min()); _cpi_mx=float(merged["CPI"].max())
@@ -313,6 +315,31 @@ if _cpi_mn==_cpi_mx: _cpi_mn-=0.1; _cpi_mx+=0.1
 for k,v in [("f_cats",_all_cats),("f_sta",_sta_all),
             ("f_spi",(_spi_mn,_spi_mx)),("f_cpi",(_cpi_mn,_cpi_mx))]:
     if k not in st.session_state: st.session_state[k]=v
+
+st.session_state["f_cats"]=[c for c in st.session_state["f_cats"] if c in _all_cats] or _all_cats
+st.session_state["f_sta"]=[s for s in st.session_state["f_sta"] if s in _sta_all] or _sta_all
+st.session_state["f_spi"]=(max(_spi_mn,float(st.session_state["f_spi"][0])),
+                           min(_spi_mx,float(st.session_state["f_spi"][1])))
+st.session_state["f_cpi"]=(max(_cpi_mn,float(st.session_state["f_cpi"][0])),
+                           min(_cpi_mx,float(st.session_state["f_cpi"][1])))
+if st.session_state["f_spi"][0]>st.session_state["f_spi"][1]:
+    st.session_state["f_spi"]=(_spi_mn,_spi_mx)
+if st.session_state["f_cpi"][0]>st.session_state["f_cpi"][1]:
+    st.session_state["f_cpi"]=(_cpi_mn,_cpi_mx)
+if "f_cats_w" in st.session_state:
+    st.session_state["f_cats_w"]=[c for c in st.session_state["f_cats_w"] if c in _all_cats] or _all_cats
+if "f_sta_w" in st.session_state:
+    st.session_state["f_sta_w"]=[s for s in st.session_state["f_sta_w"] if s in _sta_all] or _sta_all
+if "f_spi_w" in st.session_state:
+    st.session_state["f_spi_w"]=(max(_spi_mn,float(st.session_state["f_spi_w"][0])),
+                                 min(_spi_mx,float(st.session_state["f_spi_w"][1])))
+    if st.session_state["f_spi_w"][0]>st.session_state["f_spi_w"][1]:
+        st.session_state["f_spi_w"]=(_spi_mn,_spi_mx)
+if "f_cpi_w" in st.session_state:
+    st.session_state["f_cpi_w"]=(max(_cpi_mn,float(st.session_state["f_cpi_w"][0])),
+                                 min(_cpi_mx,float(st.session_state["f_cpi_w"][1])))
+    if st.session_state["f_cpi_w"][0]>st.session_state["f_cpi_w"][1]:
+        st.session_state["f_cpi_w"]=(_cpi_mn,_cpi_mx)
 
 sf=st.session_state["f_sta"]
 conds=[]
